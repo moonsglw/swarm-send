@@ -1,0 +1,5 @@
+.env
+venv/
+*nira*
+logs/*
+!logs/.gitkeep

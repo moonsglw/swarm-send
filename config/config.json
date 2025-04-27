@@ -1,0 +1,15 @@
+{
+    "subject": "Welcome {{ firstName }} to SwarmSend!",
+    "cc": ["another@example.com"],
+    "csv_file_path": "email_list.csv",
+    "template": "sample_email.html",
+    "placeholders": [
+        "username",
+        "firstName",
+        "lastName",
+        "password"
+    ],
+    "delay_seconds": 1,
+    "log_file": "email_log.csv",
+    "batch_size": 50
+}
