@@ -3,3 +3,6 @@ venv/
 *nira*
 logs/*
 !logs/.gitkeep
+attachments/*
+!attachments/.gitkeep
+*.zip

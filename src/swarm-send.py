@@ -12,6 +12,9 @@ import re
 import argparse
 from jinja2 import Template
 import concurrent.futures
+import glob
+from email.mime.application import MIMEApplication
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,8 +32,35 @@ def is_valid_email(email):
     """Simple regex to validate email format."""
     return bool(re.match(r"[^@]+@[^@]+\.[^@]+", email))
 
-def send_email(smtp_server, smtp_port, sender_email, sender_password, recipient_email, cc_emails, subject, body):
-    """Send email using the SMTP server."""
+def get_attachment_files(prefix, attachment_dir, allow_multiple_attachments):
+    """Return matching .zip files from attachment_dir that start with prefix."""
+    pattern = os.path.join(attachment_dir, f"{prefix}*.zip")
+    matches = sorted(glob.glob(pattern))  # Sorted for consistent ordering
+    if not allow_multiple_attachments and matches:
+        return [matches[0]]
+    return matches
+
+# def send_email(smtp_server, smtp_port, sender_email, sender_password, recipient_email, cc_emails, subject, body):
+#     """Send email using the SMTP server."""
+#     msg = MIMEMultipart()
+#     msg['From'] = sender_email
+#     msg['To'] = recipient_email
+#     msg['Subject'] = subject
+
+#     if cc_emails:
+#         msg['Cc'] = ", ".join(cc_emails)
+
+#     msg.attach(MIMEText(body, 'html'))
+
+#     recipients = [recipient_email] + cc_emails if cc_emails else [recipient_email]
+
+#     with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+#         server.starttls()
+#         server.login(sender_email, sender_password)
+#         server.sendmail(sender_email, recipients, msg.as_string())
+
+def send_email(smtp_server, smtp_port, sender_email, sender_password, recipient_email, cc_emails, subject, body, attachments=None):
+    """Send email with optional attachments using the SMTP server."""
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = recipient_email
@@ -41,6 +71,18 @@ def send_email(smtp_server, smtp_port, sender_email, sender_password, recipient_
 
     msg.attach(MIMEText(body, 'html'))
 
+    # Attach files
+    if attachments:
+        for filepath in attachments:
+            try:
+                with open(filepath, "rb") as f:
+                    part = MIMEApplication(f.read(), Name=os.path.basename(filepath))
+                    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(filepath)}"'
+                    msg.attach(part)
+            except Exception as e:
+                print(f"Failed to attach file {filepath}: {e}")
+                raise
+
     recipients = [recipient_email] + cc_emails if cc_emails else [recipient_email]
 
     with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
@@ -48,30 +90,51 @@ def send_email(smtp_server, smtp_port, sender_email, sender_password, recipient_
         server.login(sender_email, sender_password)
         server.sendmail(sender_email, recipients, msg.as_string())
 
-def send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body):
-    """Send emails concurrently using multiple threads."""
+
+# def send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body):
+#     """Send emails concurrently using multiple threads."""
+#     with concurrent.futures.ThreadPoolExecutor() as executor:
+#         futures = []
+#         for recipient in recipients:
+#             futures.append(executor.submit(send_email, smtp_server, smtp_port, sender_email, sender_password, recipient, cc_emails, subject, body))
+        
+#         # Wait for all futures to complete
+#         concurrent.futures.wait(futures)
+#         #print(f"Sent emails to {len(recipients)} recipients concurrently.")
+
+# def retry_send_email(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body, retries=3, delay=5):
+#     """Retry email sending logic."""
+#     attempt = 0
+#     while attempt < retries:
+#         try:
+#             send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body)
+#             return
+#         except Exception as e:
+#             attempt += 1
+#             print(f"Error sending email: {e}. Retrying... {attempt}/{retries}")
+#             time.sleep(delay)
+    
+#     print(f"Failed to send email to {recipients} after {retries} attempts.")
+
+def send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body, attachments=None):
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = []
         for recipient in recipients:
-            futures.append(executor.submit(send_email, smtp_server, smtp_port, sender_email, sender_password, recipient, cc_emails, subject, body))
-        
-        # Wait for all futures to complete
+            futures.append(executor.submit(send_email, smtp_server, smtp_port, sender_email, sender_password, recipient, cc_emails, subject, body, attachments))
         concurrent.futures.wait(futures)
-        #print(f"Sent emails to {len(recipients)} recipients concurrently.")
 
-def retry_send_email(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body, retries=3, delay=5):
-    """Retry email sending logic."""
+def retry_send_email(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body, retries=3, delay=5, attachments=None):
     attempt = 0
     while attempt < retries:
         try:
-            send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body)
+            send_email_in_batch(smtp_server, smtp_port, sender_email, sender_password, recipients, cc_emails, subject, body, attachments)
             return
         except Exception as e:
             attempt += 1
             print(f"Error sending email: {e}. Retrying... {attempt}/{retries}")
             time.sleep(delay)
-    
     print(f"Failed to send email to {recipients} after {retries} attempts.")
+
 
 def parse_args():
     """Parse command-line arguments."""
@@ -181,7 +244,32 @@ def main():
                 subject = render_template(subject_template, context)
                 message = render_template(message_template, context)
 
-                retry_send_email(smtp_server, smtp_port, sender_email, sender_password, [email_addr], cc_emails, subject, message)
+                #retry_send_email(smtp_server, smtp_port, sender_email, sender_password, [email_addr], cc_emails, subject, message)
+                
+                attachments_cfg = config.get("attachments", {})
+                attachments = []
+                if attachments_cfg.get("enabled", False):
+                    attachment_dir = os.path.join(data_dir, attachments_cfg.get("directory", "attachments"))
+                    allow_multiple = attachments_cfg.get("allow_multiple", False)
+                    #prefix = row.get("attachment_prefix", row.get("district", ""))  # fallback to 'district' column
+                    prefix_key = attachments_cfg.get("use_prefix_from", "attachment_prefix")
+                    prefix = row.get(prefix_key, "")
+                    attachments = get_attachment_files(prefix, attachment_dir, allow_multiple)
+
+                    # Skip if no attachment found
+                    if not attachments:
+                        log.append({
+                            "timestamp": timestamp,
+                            "email": email_addr,
+                            "status": "Skipped",
+                            "error_message": f"No attachment found for prefix '{prefix}'"
+                        })
+                        continue
+
+
+                # Now pass attachments to send_email (via retry_send_email)
+                retry_send_email(smtp_server, smtp_port, sender_email, sender_password, [email_addr], cc_emails, subject, message, attachments=attachments)
+
                 log.append({
                     "timestamp": timestamp,
                     "email": email_addr,
